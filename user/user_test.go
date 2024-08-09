@@ -519,6 +519,283 @@ func TestGetAdditionalGroupsNumeric(t *testing.T) {
 	}
 }
 
+func TestIDMapListFromSubIDs(t *testing.T) {
+	subuids := []SubID{
+		{
+			Name:  "user",
+			SubID: 100,
+			Count: 1000,
+		},
+		{
+			Name:  "user",
+			SubID: 5000,
+			Count: 2000,
+		},
+		{
+			Name:  "user",
+			SubID: 10000,
+			Count: 20000,
+		},
+	}
+	subgids := []SubID{
+		{
+			Name:  "user",
+			SubID: 1000,
+			Count: 10000,
+		},
+		{
+			Name:  "user",
+			SubID: 20000,
+			Count: 30000,
+		},
+	}
+	expected := IDMapList{
+		UIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 100,
+				Count:    1000,
+			},
+			{
+				ID:       1000,
+				ParentID: 5000,
+				Count:    2000,
+			},
+			{
+				ID:       3000,
+				ParentID: 10000,
+				Count:    20000,
+			},
+		},
+		GIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 1000,
+				Count:    10000,
+			},
+			{
+				ID:       10000,
+				ParentID: 20000,
+				Count:    30000,
+			},
+		},
+	}
+
+	r := IDMapListFromSubIDs(subuids, subgids)
+	if !reflect.DeepEqual(r, expected) {
+		t.Logf("Unexpected UserMaps %v, expected %v", r, expected)
+		t.Fail()
+	}
+}
+
+func TestIDMapListRootPair(t *testing.T) {
+	idmap := IDMapList{
+		UIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 1000,
+				Count:    1,
+			},
+		},
+		GIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 2000,
+				Count:    1,
+			},
+		},
+	}
+
+	uid, gid, err := idmap.RootPair()
+	if err != nil {
+		t.Logf("Unexpected error: %v", err)
+		t.Fail()
+	} else {
+		if uid != 1000 {
+			t.Logf("Expect uid to be 1000, got %v", uid)
+			t.Fail()
+		}
+		if gid != 2000 {
+			t.Logf("Expect gid to be 2000, got %v", gid)
+			t.Fail()
+		}
+	}
+
+	badMap := IDMapList{
+		UIDMaps: []IDMap{
+			{
+				ID:       1,
+				ParentID: 1000,
+				Count:    1,
+			},
+		},
+	}
+	_, _, err = badMap.RootPair()
+	if err == nil {
+		t.Logf("Unexpected successful result from invalid user mappings")
+		t.Fail()
+	}
+}
+
+func TestIDMapListChildIDs(t *testing.T) {
+	idmap := IDMapList{
+		UIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 1,
+				Count:    2,
+			},
+			{
+				ID:       2,
+				ParentID: 4,
+				Count:    1000,
+			},
+		},
+		GIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 2,
+				Count:    4,
+			},
+			{
+				ID:       4,
+				ParentID: 8,
+				Count:    1000,
+			},
+		},
+	}
+
+	for _, test := range []struct {
+		cUid, cGid int64
+		pUid, pGid int64
+		hasError   bool
+	}{
+		{
+			cUid: 0, cGid: 0,
+			pUid: 1, pGid: 2,
+		},
+		{
+			cUid: 1, cGid: 1,
+			pUid: 2, pGid: 3,
+		},
+		{
+			cUid: 2, cGid: 4,
+			pUid: 4, pGid: 8,
+		},
+		{
+			cUid: 100, cGid: 200,
+			pUid: 102, pGid: 204,
+		},
+		{
+			cUid: 1001, cGid: 1003,
+			pUid: 1003, pGid: 1007,
+		},
+		{
+			cUid: -1, cGid: -1,
+			pUid: 1004, pGid: 1008,
+			hasError: true,
+		},
+		{
+			cUid: -1, cGid: -1,
+			pUid: 2000, pGid: 2000,
+			hasError: true,
+		},
+	} {
+		uid, gid, err := idmap.ChildIDs(test.pUid, test.pGid)
+		if test.hasError && err == nil {
+			t.Logf("ChildIDs func for (%v, %v) expected error but got none", test.pUid, test.pGid)
+		}
+		if !test.hasError && err != nil {
+			t.Logf("ChildIDs func got unexpected error %v for (%v, %v)", err, test.pUid, test.pGid)
+			t.Fail()
+		}
+		if uid != test.cUid || gid != test.cGid {
+			t.Logf("Parent (%v, %v) should map to child (%v, %v), but got (%v, %v)", test.pUid, test.pGid, test.cUid, test.pGid, uid, gid)
+			t.Fail()
+		}
+	}
+}
+
+func TestIDMapListParentIDs(t *testing.T) {
+	idmap := IDMapList{
+		UIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 1,
+				Count:    2,
+			},
+			{
+				ID:       2,
+				ParentID: 4,
+				Count:    1000,
+			},
+		},
+		GIDMaps: []IDMap{
+			{
+				ID:       0,
+				ParentID: 2,
+				Count:    4,
+			},
+			{
+				ID:       4,
+				ParentID: 8,
+				Count:    1000,
+			},
+		},
+	}
+
+	for _, test := range []struct {
+		cUid, cGid int64
+		pUid, pGid int64
+		hasError   bool
+	}{
+		{
+			cUid: 0, cGid: 0,
+			pUid: 1, pGid: 2,
+		},
+		{
+			cUid: 1, cGid: 1,
+			pUid: 2, pGid: 3,
+		},
+		{
+			cUid: 2, cGid: 4,
+			pUid: 4, pGid: 8,
+		},
+		{
+			cUid: 100, cGid: 200,
+			pUid: 102, pGid: 204,
+		},
+		{
+			cUid: 1001, cGid: 1003,
+			pUid: 1003, pGid: 1007,
+		},
+		{
+			cUid: 1004, cGid: 1008,
+			pUid: -1, pGid: -1,
+			hasError: true,
+		},
+		{
+			cUid: 2000, cGid: 2000,
+			pUid: -1, pGid: -1,
+			hasError: true,
+		},
+	} {
+		uid, gid, err := idmap.ParentIDs(test.cUid, test.cGid)
+		if test.hasError && err == nil {
+			t.Logf("ParentIDs func for (%v, %v) expected error but got none", test.cUid, test.cGid)
+			t.Fail()
+		}
+		if !test.hasError && err != nil {
+			t.Logf("ParentIDs func got unexpected error %v for (%v, %v)", err, test.cUid, test.cGid)
+			t.Fail()
+		}
+		if uid != test.pUid || gid != test.pGid {
+			t.Logf("Child (%v, %v) should map to parent (%v, %v), but got (%v, %v)", test.cUid, test.cGid, test.pUid, test.pGid, uid, gid)
+			t.Fail()
+		}
+	}
+}
+
 // Generate a proper "largegroup" entry for group tests.
 func largeGroup() (res string) {
 	var b strings.Builder

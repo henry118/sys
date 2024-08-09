@@ -23,6 +23,8 @@ var (
 	ErrNoGroupEntries = errors.New("no matching entries in group file")
 	// ErrRange is returned if a UID or GID is outside of the valid range.
 	ErrRange = fmt.Errorf("uids and gids must be in range %d-%d", minID, maxID)
+	// ErrIDMap is returned when failing to find a mapping for a Uid/Gid.
+	ErrIDMap = errors.New("ID mapping failure")
 )
 
 type User struct {
@@ -54,6 +56,12 @@ type IDMap struct {
 	ID       int64
 	ParentID int64
 	Count    int64
+}
+
+// IDMapList represents a list of UID and GID mappings for a user.
+type IDMapList struct {
+	UIDMaps []IDMap
+	GIDMaps []IDMap
 }
 
 func parseLine(line []byte, v ...interface{}) {
@@ -601,4 +609,117 @@ func ParseIDMapFilter(r io.Reader, filter func(IDMap) bool) ([]IDMap, error) {
 	}
 
 	return out, nil
+}
+
+// IDMapListFromSubIDs returns a IDMapList object from subuid and subgid SubID list
+func IDMapListFromSubIDs(subuids, subgids []SubID) IDMapList {
+	return IDMapList{
+		UIDMaps: createIDMap(subuids),
+		GIDMaps: createIDMap(subgids),
+	}
+}
+
+// IDMapListFromFiles returns a IDMapList object for a given user by parsing the subuid and subgid files.
+func IDMapListFromFiles(subuidPath, subgidPath, username string) (IDMapList, error) {
+	subuids, err := ParseSubIDFileFilter(subuidPath, func(m SubID) bool { return m.Name == username })
+	if err != nil {
+		return IDMapList{}, err
+	}
+	subgids, err := ParseSubIDFileFilter(subgidPath, func(m SubID) bool { return m.Name == username })
+	if err != nil {
+		return IDMapList{}, err
+	}
+	return IDMapListFromSubIDs(subuids, subgids), nil
+}
+
+// createIDMap constructs a IDMap array from a SubID array
+func createIDMap(subids []SubID) []IDMap {
+	idMap := []IDMap{}
+
+	var containerID int64 = 0
+	for _, idrange := range subids {
+		idMap = append(idMap, IDMap{
+			ID:       containerID,
+			ParentID: idrange.SubID,
+			Count:    idrange.Count,
+		})
+		containerID = containerID + idrange.Count
+	}
+	return idMap
+}
+
+// RootPair returns the id pair for the root user
+func (m IDMapList) RootPair() (int64, int64, error) {
+	uid, err := getParent(0, m.UIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	gid, err := getParent(0, m.GIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	return uid, gid, nil
+}
+
+// ParentIDs returns the parent id pair for the uid, gid pair.
+func (m IDMapList) ParentIDs(uid, gid int64) (int64, int64, error) {
+	pUid, err := getParent(uid, m.UIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	pGid, err := getParent(gid, m.GIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	return pUid, pGid, nil
+}
+
+// ChildIDs returns the id pair for the parent uid and gid
+func (m IDMapList) ChildIDs(parentUid, parentGid int64) (int64, int64, error) {
+	uid, err := getChild(parentUid, m.UIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	gid, err := getChild(parentGid, m.GIDMaps)
+	if err != nil {
+		return -1, -1, err
+	}
+	return uid, gid, nil
+}
+
+// Empty returns true if there are no id mappings
+func (m IDMapList) Empty() bool {
+	return len(m.UIDMaps) == 0 && len(m.GIDMaps) == 0
+}
+
+// getChild takes an id mapping, and uses it to translate a
+// parent ID to the remapped ID. If no map is provided, then the translation
+// assumes a 1-to-1 mapping and returns the passed in id
+func getChild(parent int64, idMap []IDMap) (int64, error) {
+	if idMap == nil {
+		return parent, nil
+	}
+	for _, m := range idMap {
+		if (parent >= m.ParentID) && (parent <= (m.ParentID + m.Count - 1)) {
+			contID := m.ID + (parent - m.ParentID)
+			return contID, nil
+		}
+	}
+	return -1, fmt.Errorf("parent ID %d cannot be mapped to a child ID: %w", parent, ErrIDMap)
+}
+
+// getParent takes an id mapping and a remapped ID, and translates the
+// ID to the mapped parent ID. If no map is provided, then the translation
+// assumes a 1-to-1 mapping and returns the passed in id #
+func getParent(id int64, idMap []IDMap) (int64, error) {
+	if idMap == nil {
+		return id, nil
+	}
+	for _, m := range idMap {
+		if (id >= m.ID) && (id <= (m.ID + m.Count - 1)) {
+			hostID := m.ParentID + (id - m.ID)
+			return hostID, nil
+		}
+	}
+	return -1, fmt.Errorf("child ID %d cannot be mapped to a parent ID: %w", id, ErrIDMap)
 }
